@@ -73,9 +73,16 @@ void drawMainMenu(unsigned int frameCount, int width, int height, int fps, int s
     Bdisp_PutDisp_DD();
 }
 
-// --- MAIN LOGIC ---
+void kill_all_user_timers() {
+    // Timers 5 through 10 are the "User" timers for add-ins
+    for (int i = 5; i <= 10; i++) {
+        Timer_Deinstall(i); 
+    }
+}
 
+// --- MAIN LOGIC ---
 int main(void) {
+    kill_all_user_timers();
     unsigned short pFile[64];
     Bdisp_EnableColor(1);
     clearDisplay();
@@ -84,13 +91,24 @@ int main(void) {
     int hFile = Bfile_OpenFile_OS(pFile, READ, 0);
 
     if (hFile < 0) {
-        locate_OS(1, 1);
-        Print_OS("Error: video.bin not found!", 0, 0);
-        while(1) { int k; GetKey(&k); }
-        return 1;
+        locate_OS(1, 1); Print_OS("FATAL ERROR", 0, 0);
+        char msg[32];
+        sprintf(msg, "Bfile Error: %d", hFile);
+        locate_OS(1, 2); Print_OS(msg, 0, 0);
+
+
+        if (hFile == -1) {
+            locate_OS(1, 4); Print_OS("File not found.", 0, 0);
+        } else if (hFile == -8) {
+            locate_OS(1, 4); Print_OS("Press the RESET", 0, 0);
+            locate_OS(1, 5); Print_OS("button on the back", 0, 0);
+            locate_OS(1, 6); Print_OS("of the calculator.", 0, 0);
+        }
+        
+        while(1) { int k; GetKey(&k); if(k==KEY_CTRL_EXIT) return 0; }
     }
 
-    // Read Header
+    // --- Header and Menu ---
     unsigned int totalFrames = read32(hFile);
     unsigned short w = read16(hFile);
     unsigned short h = read16(hFile);
@@ -98,38 +116,33 @@ int main(void) {
     unsigned char palSize;
     Bfile_ReadFile_OS(hFile, &palSize, 1, -1);
 
-    // Calculate Scale
     int scaleX = 384 / w;
     int scaleY = 216 / h;
     int scale = (scaleX < scaleY) ? scaleX : scaleY;
     if (scale < 1) scale = 1;
 
-    // Show Menu
     while (1) {
         int key = 0;
         drawMainMenu(totalFrames, w, h, fps, scale);
         GetKey(&key);
-        if (key == KEY_CTRL_EXE || key == 0x000D) break; // Start Playback
-        if (key == KEY_CTRL_EXIT) { Bfile_CloseFile_OS(hFile); return 0; }
+        if (key == KEY_CTRL_EXE || key == 0x000D) break; 
+        if (key == KEY_CTRL_EXIT) goto end_app; // Use goto to ensure cleanup
     }
 
-    // Load Palette
     for(int i=0; i < (palSize > 16 ? 16 : palSize); i++) {
         global_palette[i] = read16(hFile);
     }
 
-    // Centering offsets
     int x_off = (384 - (w * scale)) / 2;
     int y_off = (216 - (h * scale)) / 2;
     unsigned short *vram = GetVRAMAddress();
-    
     Bdisp_AllClr_VRAM();
 
-    // Playback Loop
+    // --- Playback Loop ---
     for(unsigned int f = 0; f < totalFrames; f++) {
         int ticks = RTC_GetTicks();
-
         unsigned int frameSize = read32(hFile);
+        
         if (frameSize > 30000) {
             Bfile_SeekFile_OS(hFile, Bfile_TellFile_OS(hFile) + frameSize);
             continue;
@@ -146,33 +159,22 @@ int main(void) {
             for(int n = 0; n < count; n++) {
                 int sx = (px * scale) + x_off;
                 int sy = (py * scale) + y_off;
-
                 for(int dy = 0; dy < scale; dy++) {
                     unsigned short* line = &vram[(sy + dy) * 384 + sx];
-                    for(int dx = 0; dx < scale; dx++) {
-                        line[dx] = color;
-                    }
+                    for(int dx = 0; dx < scale; dx++) line[dx] = color;
                 }
-                
                 px++;
                 if(px >= w) { px = 0; py++; }
             }
         }
-        
         Bdisp_PutDisp_DD();
-        
-        // Wait function
         if (wait_for_exit(ticks, 1000 / fps)) break;
     }
 
-    Bfile_CloseFile_OS(hFile);
-    
-    // Post-video exit screen
+    // Exit screen
     clearDisplay();
-    locate_OS(1, 4);
-    Print_OS("Enter another app", 0, 0);
-    locate_OS(1, 5);
-    Print_OS("to replay", 0, 0);
+    locate_OS(1, 4); Print_OS("Enter another", 0, 0);
+    locate_OS(1, 5); Print_OS("app to replay.", 0, 0);
 
     while(1) {
         int key;
@@ -180,5 +182,10 @@ int main(void) {
         if (key == KEY_CTRL_EXIT) break;
     }
 
+end_app:
+    // Safety to prevent video.bin not found
+    if (hFile >= 0) {
+        Bfile_CloseFile_OS(hFile);
+    }
     return 0;
 }
