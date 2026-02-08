@@ -73,22 +73,26 @@ void drawMainMenu(unsigned int frameCount, int width, int height, int fps, int s
     Bdisp_PutDisp_DD();
 }
 
-void kill_all_user_timers() {
-    // Timers 5 through 10 are the "User" timers for add-ins
-    for (int i = 5; i <= 10; i++) {
-        Timer_Deinstall(i); 
+static int g_hFile = -1;
+void quit_handler(void) {
+    if (g_hFile >= 0) {
+        Bfile_CloseFile_OS(g_hFile);
+        g_hFile = -1;
     }
 }
 
+
 // --- MAIN LOGIC ---
 int main(void) {
-    kill_all_user_timers();
+    SetQuitHandler(quit_handler);
     unsigned short pFile[64];
     Bdisp_EnableColor(1);
     clearDisplay();
 
     Bfile_StrToName_ncpy(pFile, (const char*)FILE_PATH, 64);
-    int hFile = Bfile_OpenFile_OS(pFile, READ, 0);
+    g_hFile = Bfile_OpenFile_OS(pFile, READ, 0);
+    int hFile = g_hFile;
+
 
     if (hFile < 0) {
         locate_OS(1, 1); Print_OS("FATAL ERROR", 0, 0);
@@ -116,6 +120,15 @@ int main(void) {
     unsigned char palSize;
     Bfile_ReadFile_OS(hFile, &palSize, 1, -1);
 
+    if (w == 0 || h == 0 || w > 384 || h > 216 || fps == 0 || palSize == 0 || palSize > 16) {
+        clearDisplay();
+        locate_OS(1, 2); Print_OS("BAD VIDEO FILE", 0, 0);
+        while (1) { int k; GetKey(&k); if (k == KEY_CTRL_EXIT) break; }
+        g_hFile = -1;
+        return 0;
+    }
+
+
     int scaleX = 384 / w;
     int scaleY = 216 / h;
     int scale = (scaleX < scaleY) ? scaleX : scaleY;
@@ -126,7 +139,10 @@ int main(void) {
         drawMainMenu(totalFrames, w, h, fps, scale);
         GetKey(&key);
         if (key == KEY_CTRL_EXE || key == 0x000D) break; 
-        if (key == KEY_CTRL_EXIT) goto end_app; // Use goto to ensure cleanup
+        if (key == KEY_CTRL_EXIT) {
+            g_hFile = -1;
+            return 0;
+        }
     }
 
     for(int i=0; i < (palSize > 16 ? 16 : palSize); i++) {
@@ -142,21 +158,26 @@ int main(void) {
     for(unsigned int f = 0; f < totalFrames; f++) {
         int ticks = RTC_GetTicks();
         unsigned int frameSize = read32(hFile);
-        
-        if (frameSize > 30000) {
-            Bfile_SeekFile_OS(hFile, Bfile_TellFile_OS(hFile) + frameSize);
-            continue;
+
+        if (frameSize == 0 || frameSize > 30000 || (frameSize & 1)) {
+            break; // corrupted frame
         }
         
-        Bfile_ReadFile_OS(hFile, compressed_buffer, frameSize, -1);
+        if (Bfile_ReadFile_OS(hFile, compressed_buffer, frameSize, -1) != frameSize) {
+            break;
+        }
+
 
         int px = 0, py = 0;
         for(unsigned int i = 0; i < frameSize; i += 2) {
             unsigned char count = compressed_buffer[i];
             unsigned char pal_idx = compressed_buffer[i+1];
+            if (pal_idx >= palSize) continue;
             unsigned short color = global_palette[pal_idx];
 
+
             for(int n = 0; n < count; n++) {
+                if (py >= h) break;
                 int sx = (px * scale) + x_off;
                 int sy = (py * scale) + y_off;
                 for(int dy = 0; dy < scale; dy++) {
@@ -182,10 +203,6 @@ int main(void) {
         if (key == KEY_CTRL_EXIT) break;
     }
 
-end_app:
-    // Safety to prevent video.bin not found
-    if (hFile >= 0) {
-        Bfile_CloseFile_OS(hFile);
-    }
+    g_hFile = -1;
     return 0;
 }
