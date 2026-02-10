@@ -15,8 +15,7 @@
 static unsigned char compressed_buffer[30000]; 
 static unsigned short global_palette[16];
 
-// --- HELPER FUNCTIONS ---
-
+// HELPER FUNCTIONS
 void clearDisplay() {
     unsigned short *p = GetVRAMAddress();
     for (int i = 0; i < 216 * 384; i++) {
@@ -73,6 +72,7 @@ void drawMainMenu(unsigned int frameCount, int width, int height, int fps, int s
     Bdisp_PutDisp_DD();
 }
 
+// Prevents issues with Bfile error: -8
 static int g_hFile = -1;
 void quit_handler(void) {
     if (g_hFile >= 0) {
@@ -82,17 +82,17 @@ void quit_handler(void) {
 }
 
 
-// --- MAIN LOGIC ---
+// MAIN LOGIC
 int main(void) {
     SetQuitHandler(quit_handler);
     unsigned short pFile[64];
     Bdisp_EnableColor(1);
     clearDisplay();
 
+    // Finds video.bin
     Bfile_StrToName_ncpy(pFile, (const char*)FILE_PATH, 64);
     g_hFile = Bfile_OpenFile_OS(pFile, READ, 0);
     int hFile = g_hFile;
-
 
     if (hFile < 0) {
         locate_OS(1, 1); Print_OS("FATAL ERROR", 0, 0);
@@ -112,7 +112,8 @@ int main(void) {
         while(1) { int k; GetKey(&k); if(k==KEY_CTRL_EXIT) return 0; }
     }
 
-    // --- Header and Menu ---
+    // Header and Menu
+    // Frames(4), Width(2), Height(2), FPS(2), PalSize(1)
     unsigned int totalFrames = read32(hFile);
     unsigned short w = read16(hFile);
     unsigned short h = read16(hFile);
@@ -120,6 +121,7 @@ int main(void) {
     unsigned char palSize;
     Bfile_ReadFile_OS(hFile, &palSize, 1, -1);
 
+    // Exits if video dimensions/palette size/fps are invalid
     if (w == 0 || h == 0 || w > 384 || h > 216 || fps == 0 || palSize == 0 || palSize > 16) {
         clearDisplay();
         locate_OS(1, 2); Print_OS("BAD VIDEO FILE", 0, 0);
@@ -154,9 +156,9 @@ int main(void) {
     unsigned short *vram = GetVRAMAddress();
     Bdisp_AllClr_VRAM();
 
-    // --- Playback Loop ---
+    // Playback Loop (goes through every frame)
     for(unsigned int f = 0; f < totalFrames; f++) {
-        int ticks = RTC_GetTicks();
+        int ticks = RTC_GetTicks(); // Used to control FPS
         unsigned int frameSize = read32(hFile);
 
         if (frameSize == 0 || frameSize > 30000 || (frameSize & 1)) {
@@ -169,10 +171,10 @@ int main(void) {
 
 
         int px = 0, py = 0;
-        for(unsigned int i = 0; i < frameSize; i += 2) {
+        for(unsigned int i = 0; i < frameSize; i += 2) { // RLE
             unsigned char count = compressed_buffer[i];
             unsigned char pal_idx = compressed_buffer[i+1];
-            if (pal_idx >= palSize) continue;
+            if (pal_idx >= palSize) continue; // Skips if invalid palette index
             unsigned short color = global_palette[pal_idx];
 
 
@@ -180,29 +182,35 @@ int main(void) {
                 if (py >= h) break;
                 int sx = (px * scale) + x_off;
                 int sy = (py * scale) + y_off;
+                
+                // Write to VRAM
                 for(int dy = 0; dy < scale; dy++) {
                     unsigned short* line = &vram[(sy + dy) * 384 + sx];
                     for(int dx = 0; dx < scale; dx++) line[dx] = color;
                 }
                 px++;
-                if(px >= w) { px = 0; py++; }
+                if(px >= w) { px = 0; py++; } // Next line
             }
         }
-        Bdisp_PutDisp_DD();
-        if (wait_for_exit(ticks, 1000 / fps)) break;
+        Bdisp_PutDisp_DD(); // Display frame
+
+        // Check if user wants to exit
+        if (wait_for_exit(ticks, 1000 / fps)) break; 
     }
 
-    // Exit screen
+    // Exit screen (must go into another app)
     clearDisplay();
     locate_OS(1, 4); Print_OS("Enter another", 0, 0);
     locate_OS(1, 5); Print_OS("app to replay.", 0, 0);
 
+    // Press EXIT button to quit
     while(1) {
         int key;
         GetKey(&key);
         if (key == KEY_CTRL_EXIT) break;
     }
 
+    // Prevents some pointer issues
     g_hFile = -1;
     return 0;
 }

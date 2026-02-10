@@ -4,8 +4,7 @@ import numpy as np
 import os
 import sys
 
-# --- PALETTE DEFINITIONS ---
-
+# Palletes (Can add new palettes, max 16 colors)
 PALETTES = {
     "1": ("Standard 16-Color", np.array([
         [0, 0, 0], [128, 0, 0], [0, 128, 0], [128, 128, 0],
@@ -22,7 +21,7 @@ PALETTES = {
         [i, i, i] for i in np.linspace(0, 255, 16).astype(np.uint8)
     ], dtype=np.uint8)),
     
-    "4": ("High-Contrast B&W (2-Color)", np.array([
+    "4": ("Black and white (Smallest file size)", np.array([
         [0, 0, 0], [255, 255, 255]
     ], dtype=np.uint8))
 }
@@ -34,12 +33,12 @@ def select_palette():
     
     choice = input("\nEnter choice (1-4): ").strip()
     if choice not in PALETTES:
-        print("Invalid choice, defaulting to Standard 16-Color.")
-        return PALETTES["1"][1]
+        print("Invalid choice, defaulting to 4-Color Grayscale (Gameboy).")
+        return PALETTES["2"][1]
     
     return PALETTES[choice][1]
 
-# Global variable to be set at runtime
+# Pallete is defined at runtime
 FIXED_PALETTE_BGR = None
 
 def get_palette_565():
@@ -65,6 +64,7 @@ def process_video(input_path):
     FPS = int(video.get(cv2.CAP_PROP_FPS))
     total_frames = int(video.get(cv2.CAP_PROP_FRAME_COUNT))
 
+    # Exits if video is greater than max res of calculator
     if W > 384 or H > 216:
         print(f"FATAL ERROR: Resolution {W}x{H} exceeds 384x216.")
         video.release()
@@ -76,7 +76,7 @@ def process_video(input_path):
     print(f"\nEncoding {W}x{H} @ {FPS} FPS with {pal_size} colors")
 
     with open("video.bin", "wb") as f:
-        # Header: Frames(4), W(2), H(2), FPS(2), PalSize(1)
+        # Header: Frames(4), Width(2), Height(2), FPS(2), PalSize(1)
         f.write(struct.pack(">IHHHB", total_frames, W, H, FPS, pal_size))
         for p in palette_565:
             f.write(struct.pack(">H", p))
@@ -115,5 +115,6 @@ def process_video(input_path):
     video.release()
     print(f"\nDone! Final Size: {os.path.getsize('video.bin')/1024:.1f} KB")
 
+# Defaults to "input.mp4"
 if __name__ == "__main__":
     process_video(sys.argv[1] if len(sys.argv) > 1 else "input.mp4")
