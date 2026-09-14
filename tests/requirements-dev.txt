@@ -1,0 +1,2 @@
+-r ../converter/requirements.txt
+pytest>=7
