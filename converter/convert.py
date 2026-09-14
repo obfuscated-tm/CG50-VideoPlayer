@@ -17,6 +17,7 @@ from cgvideo import estimate, names  # noqa: E402
 from cgvideo.errors import Cancelled, ConvertError  # noqa: E402
 from cgvideo.palettes import AUTO, FIXED_PALETTES  # noqa: E402
 from cgvideo.pipeline import SAFE_SIZE, SIZE_PRESETS, Settings, convert, probe  # noqa: E402
+from cgvideo.timefmt import parse_time  # noqa: E402
 
 
 def parse_size(text):
@@ -31,15 +32,15 @@ def parse_size(text):
                                          % ", ".join(k for k, _, _, _ in SIZE_PRESETS))
 
 
-def parse_time(text):
-    """Seconds, or m:ss / h:mm:ss."""
+def parse_time_arg(text):
     try:
-        total = 0.0
-        for part in text.split(":"):
-            total = total * 60 + float(part)
-        return total
+        seconds = parse_time(text)
     except ValueError:
-        raise argparse.ArgumentTypeError("use seconds (like 12.5) or minutes:seconds (like 1:30)")
+        seconds = None
+    if seconds is None:
+        raise argparse.ArgumentTypeError("use seconds (45), minutes:seconds (1:30), "
+                                         "hours:minutes:seconds (1:05:00) or 5m")
+    return seconds
 
 
 def parse_fps(text):
@@ -68,8 +69,8 @@ def build_parser():
     p.add_argument("--palette", choices=[AUTO] + list(FIXED_PALETTES), default=AUTO,
                    help="auto picks the best colors for this video (default)")
     p.add_argument("--dither", action="store_true", help="smoother shading (makes the file bigger)")
-    p.add_argument("--start", type=parse_time, default=0.0, help="start time, e.g. 12 or 0:12")
-    p.add_argument("--end", type=parse_time, default=None, help="end time, e.g. 90 or 1:30")
+    p.add_argument("--start", type=parse_time_arg, default=0.0, help="start time, e.g. 12 or 0:12")
+    p.add_argument("--end", type=parse_time_arg, default=None, help="end time, e.g. 90 or 1:30")
     p.add_argument("--fit", choices=["letterbox", "crop"], default="letterbox",
                    help="letterbox shows the whole picture; crop fills the screen")
     p.add_argument("--format", type=int, choices=[1, 2], default=2, dest="fmt",

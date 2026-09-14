@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from cgvideo import estimate, names  # noqa: E402
 from cgvideo.errors import Cancelled, ConvertError  # noqa: E402
 from cgvideo.palettes import AUTO, FIXED_PALETTES, PALETTE_LABELS  # noqa: E402
+from cgvideo.timefmt import format_time, parse_time  # noqa: E402
 from cgvideo.pipeline import (CALCULATOR_STORAGE, FPS_CHOICES, SAFE_SIZE, SCREEN_H, SCREEN_W,  # noqa: E402
                               SIZE_PRESETS, FrameGrabber, Settings, convert, frame_to_indices,
                               make_palette, probe, screen_image)
@@ -29,25 +30,6 @@ SIZE_LABELS = ["Tiny: 96×54 (smallest file)", "Recommended: 128×72", "Sharp: 1
                "Full screen: 384×216 (biggest file)"]
 FPS_LABELS = ["Same as the video"] + ["%d fps%s" % (f, "  (recommended)" if f == 15 else "") for f in FPS_CHOICES[1:]]
 SIDE_WIDTH = 430  # width of the settings column, in pixels
-
-
-def fmt_time(seconds):
-    seconds = int(round(seconds or 0))
-    return "%d:%02d:%02d" % (seconds // 3600, seconds // 60 % 60, seconds % 60) if seconds >= 3600 \
-        else "%d:%02d" % (seconds // 60, seconds % 60)
-
-
-def parse_time(text):
-    """'' -> None; '90', '1:30', '0:01:30' -> seconds. Raises ValueError."""
-    text = text.strip()
-    if not text:
-        return None
-    total = 0.0
-    for part in text.split(":"):
-        total = total * 60 + float(part)
-    if total < 0:
-        raise ValueError(text)
-    return total
 
 
 def fmt_size(n):
@@ -206,7 +188,7 @@ class App:
         self.pos_var = tk.DoubleVar(value=0.0)
         self.pos_scale = ttk.Scale(pos, from_=0, to=1, variable=self.pos_var, command=lambda _v: self._position_moved())
         self.pos_scale.grid(row=0, column=1, sticky="ew", padx=6)
-        self.pos_label = ttk.Label(pos, text="0:00", width=8)
+        self.pos_label = ttk.Label(pos, text="0:00", width=22)
         self.pos_label.grid(row=0, column=2)
 
         # Step 2: settings (right column)
@@ -251,8 +233,9 @@ class App:
         ttk.Entry(trim, textvariable=self.start_var, width=7).pack(side="left", padx=4)
         ttk.Label(trim, text="to").pack(side="left")
         ttk.Entry(trim, textvariable=self.end_var, width=7).pack(side="left", padx=4)
-        ttk.Label(step2, text="Times like 0:30. Leave empty for the whole video.",
-                  foreground="#666").grid(row=6, column=1, sticky="w")
+        self.trim_hint = ttk.Label(step2, text="Times like 0:30 or 1:05:00. Leave empty for the whole video.",
+                                   foreground="#777", wraplength=SIDE_WIDTH - 150)
+        self.trim_hint.grid(row=6, column=1, sticky="w")
 
         self.adv_btn = ttk.Button(step2, text="Show advanced options ▸", command=self._toggle_advanced)
         self.adv_btn.grid(row=7, column=0, columnspan=2, sticky="w", pady=(6, 0))
@@ -406,6 +389,50 @@ class App:
         self.colors_spin.configure(state="readonly" if auto else "disabled")
         self.colors_label.configure(text="colors (fewer = smaller file)" if auto else "")
 
+    def _update_trim_hint(self):
+        """Says in words which part of the video will be converted, so a typo is easy to spot,
+        and keeps the preview slider inside that part."""
+        duration = self.info.duration if self.info else None
+        try:
+            start = parse_time(self.start_var.get()) or 0.0
+            end = parse_time(self.end_var.get())
+        except ValueError:
+            self.trim_hint.configure(text="Use times like 45, 1:30, 1:05:00 or 5m.", foreground="#b00")
+            return
+        if end is not None and end <= start:
+            self.trim_hint.configure(text="The end must be after the start.", foreground="#b00")
+            return
+        if duration and start >= duration:
+            self.trim_hint.configure(text="The video is only %s long." % format_time(duration), foreground="#b00")
+            return
+        past_end = end is not None and duration is not None and end > duration
+        stop = duration if end is None or past_end else end
+        if not self.start_var.get().strip() and not self.end_var.get().strip():
+            text = "The whole video" + (" (%s)." % format_time(duration) if duration else ".")
+        elif stop is None:
+            text = "From %s to the end." % format_time(start)
+        elif past_end:
+            text = "From %s to the end of the video at %s (%s)." % (
+                format_time(start), format_time(stop), format_time(stop - start))
+        else:
+            text = "From %s to %s (%s)." % (format_time(start), format_time(stop), format_time(stop - start))
+        self.trim_hint.configure(text=text, foreground="#777")
+        if self.info:
+            self._sync_preview_range(start, stop if stop is not None else start + 1.0)
+
+    def _show_position(self):
+        """The preview's time, and the part of the video the slider covers (the trimmed part)."""
+        low, high = float(self.pos_scale.cget("from")), float(self.pos_scale.cget("to")) + 0.05
+        self.pos_label.configure(text="%s  (%s–%s)" % (format_time(self.pos_var.get()), format_time(low),
+                                                      format_time(high)))
+
+    def _sync_preview_range(self, start, stop):
+        self.pos_scale.configure(from_=start, to=max(start + 0.1, stop - 0.05))
+        pos = float(self.pos_var.get())
+        if not start <= pos <= stop:  # the preview was outside the trimmed part: move it in
+            self.pos_var.set(start if pos < start else max(start, stop - 0.05))
+        self._show_position()
+
     def set_status(self, text, error=False):
         self.status.configure(text=text, foreground="#b00" if error else "")
 
@@ -417,7 +444,7 @@ class App:
             start = parse_time(self.start_var.get()) or 0.0
             end = parse_time(self.end_var.get())
         except ValueError:
-            raise ConvertError("Times must look like 45 (seconds) or 1:30 (minutes:seconds).")
+            raise ConvertError("Times must look like 45, 1:30, 1:05:00 or 5m.")
         if end is not None and end <= start:
             raise ConvertError("The end time must be after the start time.")
         return Settings(width=w, height=h, fps=FPS_CHOICES[self.fps_combo.current()],
@@ -469,6 +496,7 @@ class App:
 
     def _settings_changed(self):
         self._sync_colors_state()
+        self._update_trim_hint()
         if self._suspend_traces or not self.info:
             return
         if self._update_after:
@@ -476,7 +504,7 @@ class App:
         self._update_after = self.root.after(250, self.request_updates)
 
     def _position_moved(self):
-        self.pos_label.configure(text=fmt_time(self.pos_var.get()))
+        self._show_position()
         if not self.info:
             return
         if self._preview_after:
@@ -654,17 +682,18 @@ class App:
                 return
             self.info = info
             name = Path(info.path).name
-            length = fmt_time(info.duration) if info.duration else "unknown length"
+            length = format_time(info.duration) if info.duration else "unknown length"
             self.info_label.configure(text="%s: %d×%d, %g fps, %s" % (name, info.width, info.height, round(info.fps, 2), length))
             self.pos_scale.configure(to=max(0.1, (info.duration or 1.0) - 0.05))
             self.pos_var.set(min((info.duration or 0) * 0.25, 5.0))
-            self.pos_label.configure(text=fmt_time(self.pos_var.get()))
+            self._show_position()
             folder = Path(info.path).parent
             self.output_var.set(str(folder / names.calculator_name(info.path, folder)))
             self.title_var.set(Path(info.path).stem[:24])
             self.convert_btn.configure(state="normal")
             self.fit_btn.configure(state="normal")
             self.canvas.itemconfigure(self.canvas_text, text="")
+            self._update_trim_hint()
             self.request_updates()
             self.root.after_idle(self._grow_to_fit)
         elif kind == "preview":
@@ -780,6 +809,7 @@ def _run_selftest(app, root, result):
     tmp = Path(tempfile.mkdtemp())
     video = tmp / "selftest.avi"
     _make_test_video(video)
+    app.end_var.set("5:00")  # past the end of the 2 s test video: must stop at its end
     app.open_video(str(video))
     started = time.time()
     state = {"stage": "loading"}
@@ -796,14 +826,17 @@ def _run_selftest(app, root, result):
             state["stage"] = "converting"
         elif state["stage"] == "converting" and not app.converting and app.last_result:
             out = tmp / "out.bin"
-            ok = out.exists() and out.read_bytes()[:4] == b"CGV2"
+            ok = out.exists() and out.read_bytes()[:4] == b"CGV2" and app.last_result.frames == 30
             print("selftest: conversion %s (%d frames)" % ("ok" if ok else "FAILED", app.last_result.frames))
+            hint = app.trim_hint.cget("text")
+            trim_ok = "end of the video" in hint
+            print("selftest: trim hint %r %s" % (hint, "ok" if trim_ok else "FAILED"))
             root.update()
             no_bars = not app.scroller.bars_shown()
             print("selftest: %s at full size" % ("no scroll bars" if no_bars else "scroll bars shown (FAILED)"))
             scrolls = _check_scrolling(app, root)
             print("selftest: scrolling %s" % ("ok" if scrolls else "FAILED"))
-            result["ok"] = ok and scrolls and fits and no_bars
+            result["ok"] = ok and scrolls and fits and no_bars and trim_ok
             root.destroy()
             return
         root.after(100, check)

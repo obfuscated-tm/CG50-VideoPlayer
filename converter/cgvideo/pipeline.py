@@ -11,6 +11,7 @@ from . import format1
 from .errors import Cancelled, ConvertError
 from .palettes import AUTO, FIXED_PALETTES, fixed_palette, palette_to_565
 from .quantize import auto_palette, map_to_palette
+from .timefmt import format_time
 
 SCREEN_W, SCREEN_H = 384, 216
 
@@ -103,8 +104,15 @@ def output_fps(settings, info):
 
 
 def time_range(settings, info):
+    """(start, end) in seconds. No end, or an end past the video's end, means "to the end"."""
     start = max(0.0, float(settings.start or 0))
-    end = settings.end if settings.end else info.duration
+    end = settings.end if settings.end else None
+    if info.duration:
+        if start >= info.duration:
+            raise ConvertError("The start time (%s) is after the end of the video (%s)."
+                               % (format_time(start), format_time(info.duration)))
+        if end is None or end > info.duration:
+            end = info.duration
     if end is not None and end <= start:
         raise ConvertError("The end time must be after the start time.")
     return start, end

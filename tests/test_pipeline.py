@@ -5,7 +5,8 @@ import pytest
 
 from cgvideo import estimate, format1, format2, names
 from cgvideo.errors import ConvertError
-from cgvideo.pipeline import Settings, convert, iter_source_frames, output_fps, probe, resize_frame
+from cgvideo.pipeline import (Settings, convert, expected_frames, iter_source_frames, output_fps, probe,
+                              resize_frame, time_range)
 
 SRC_FPS = 29.97
 
@@ -102,6 +103,25 @@ def test_seeking_lands_close(counting):
     seeked = [frame_index(f) for f in iter_source_frames(info, 2.0, 2.5, 10.0, seek=True)]
     assert len(seeked) == len(exact)
     assert all(abs(a - b) <= 1 for a, b in zip(exact, seeked))
+
+
+def test_end_past_the_video_stops_at_its_end(counting):
+    info = probe(counting)
+    past = Settings(width=32, height=18, fps=10, end=300)
+    assert time_range(past, info) == (0.0, info.duration)
+    assert expected_frames(past, info) == expected_frames(Settings(width=32, height=18, fps=10), info)
+
+
+def test_start_past_the_video_is_an_error(counting):
+    with pytest.raises(ConvertError):
+        time_range(Settings(start=60), probe(counting))
+
+
+def test_estimate_ignores_an_end_past_the_video(moving):
+    info = probe(moving)
+    whole = estimate.estimate_size(info, Settings(fps=12)).size
+    past = estimate.estimate_size(info, Settings(fps=12, end=300)).size
+    assert whole == past
 
 
 def test_format1_rounds_fps(counting):
