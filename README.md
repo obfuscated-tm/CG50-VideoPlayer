@@ -59,7 +59,20 @@ Run `python3 converter/convert.py --help` to see every option.
 2. The calculator shows up as a drive. Copy `video_player.g3a` and your `.bin` videos into its **main folder**, not into a subfolder.
 3. Eject the drive before you unplug the cable.
 
-The fx-CG50 has about 16 MB of storage. At the recommended settings (128×72, 15 fps, 4 colors), a minute of video usually takes 0.3–0.8 MB. Busy scenes take more.
+### How much fits
+
+The fx-CG50 has 16 MB of storage, shared with everything else on it: other videos, add-ins, programs, pictures, and files that came with the calculator. So what matters is its **free space**.
+
+- **In the converter:** connect the calculator (USB Flash mode). The window then shows its real free space and checks your video against it, counting a file you'd replace and room for the add-in. Without a calculator connected, it assumes about 14 MB is free.
+- **On the calculator:** the video list shows the free space at the top.
+- **Copying:** the converter's **Copy to calculator** button puts the file straight onto the calculator.
+
+At the recommended settings (128×72, 15 fps, 4 colors), a minute of video usually takes 0.3–0.8 MB. Busy scenes take more.
+
+On a Mac:
+
+- **Deleted files still take up space.** Files you delete from the calculator in Finder go to the Trash, and they keep using the calculator's space until you empty the Trash.
+- **Finder adds hidden files.** When you copy with Finder, it leaves small hidden `._` files on the calculator. The player ignores them, and **Copy to calculator** doesn't create them.
 
 ## 4. Play
 

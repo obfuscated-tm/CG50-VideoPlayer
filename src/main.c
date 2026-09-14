@@ -37,6 +37,7 @@ typedef struct {
 
 static video_entry videos[MAX_VIDEOS];
 static int video_count;
+static long free_bytes = -1; // free storage space, or -1 if unknown
 
 // File details filled in by Bfile_FindFirst/Bfile_FindNext (layout from WikiPrizm)
 typedef struct {
@@ -202,7 +203,8 @@ static void scan_videos(void) {
     while (ret == 0 && video_count < MAX_VIDEOS) {
         Bfile_NameToStr_ncpy(name, found, sizeof name - 1);
         name[sizeof name - 1] = '\0';
-        if (strlen(name) < NAME_LEN - 1) {
+        // Skip hidden files, like the "._name.bin" files a Mac's Finder leaves on the drive
+        if (name[0] != '.' && strlen(name) < NAME_LEN - 1) {
             video_entry *e = &videos[video_count++];
             strcpy(e->name, name);
             e->size = info.fsize;
@@ -212,6 +214,12 @@ static void scan_videos(void) {
     if (must_close) {
         Bfile_FindClose(handle);
     }
+
+    // Free storage space. The syscall fills in one int (WikiPrizm); the second is spare room.
+    unsigned short media[8];
+    int space[2] = {0, 0};
+    Bfile_StrToName_ncpy(media, "\\\\fls0", 8);
+    free_bytes = (Bfile_GetMediaFree_OS(media, space) == 0 && space[0] >= 0) ? space[0] : -1;
 
     // Read each header (one file open at a time)
     for (int i = 0; i < video_count; i++) {
@@ -272,7 +280,14 @@ static int list_screen(int selected) {
     for (;;) {
         char line[48], t[24];
         Bdisp_AllClr_VRAM();
-        sprintf(line, " Videos (%d)", video_count);
+        sprintf(line, " %d video%s", video_count, video_count == 1 ? "" : "s");
+        if (free_bytes >= 0) { // e.g. " 3 videos   9.2M free", right-aligned
+            char space[16];
+            sprintf(space, "%ld.%ldM free", free_bytes >> 20, ((free_bytes & 0xFFFFF) * 10) >> 20);
+            int n = (int)strlen(line), room = TEXT_COLS - (int)strlen(space);
+            while (n < room) line[n++] = ' ';
+            strcpy(line + (n > room ? room : n), space);
+        }
         text_row(1, line, true);
 
         if (video_count == 0) {

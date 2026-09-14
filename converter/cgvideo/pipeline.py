@@ -24,10 +24,6 @@ SIZE_PRESETS = [
 ]
 FPS_CHOICES = [None, 30, 24, 20, 15, 12, 10]  # None = same as the video
 
-# The fx-CG50 has 16 MB of storage; leave room for other files.
-CALCULATOR_STORAGE = 16 * 1024 * 1024
-SAFE_SIZE = 14 * 1024 * 1024
-
 
 @dataclass
 class Settings:

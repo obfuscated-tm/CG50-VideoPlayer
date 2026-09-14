@@ -16,7 +16,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from cgvideo import estimate, names  # noqa: E402
 from cgvideo.errors import Cancelled, ConvertError  # noqa: E402
 from cgvideo.palettes import AUTO, FIXED_PALETTES  # noqa: E402
-from cgvideo.pipeline import SAFE_SIZE, SIZE_PRESETS, Settings, convert, probe  # noqa: E402
+from cgvideo.calculator import ASSUMED_FREE, available_space, find_calculator  # noqa: E402
+from cgvideo.pipeline import SIZE_PRESETS, Settings, convert, probe  # noqa: E402
 from cgvideo.timefmt import parse_time  # noqa: E402
 
 
@@ -56,6 +57,19 @@ def megabytes(n):
     return "%.1f MB" % (n / (1024 * 1024)) if n >= 100 * 1024 else "%d KB" % max(1, round(n / 1024))
 
 
+def report_space(size, file_name):
+    """Says whether a file this size fits: on the connected calculator, or in ASSUMED_FREE."""
+    calc = find_calculator()
+    space = available_space(calc, file_name)
+    if calc:
+        print("Calculator connected at %s: %s free. %s" % (
+            calc.path, megabytes(calc.free),
+            "This fits." if size <= space else "NOT enough room for this file."))
+    elif size > space:
+        print("Warning: this is bigger than %s, the free space assumed for the calculator. Check its free "
+              "space (connect it with USB) before copying." % megabytes(ASSUMED_FREE))
+
+
 def build_parser():
     p = argparse.ArgumentParser(
         prog="convert.py",
@@ -93,6 +107,7 @@ def run_cli(argv):
         if args.estimate:
             est = estimate.estimate_size(info, settings)
             print("Estimated size: %s (%d frames)" % (megabytes(est.size), est.frames))
+            report_space(est.size, names.calculator_name(video))
             return 0
         out = Path(args.output) if args.output else video.parent / names.calculator_name(video, video.parent)
 
@@ -113,8 +128,7 @@ def run_cli(argv):
         if result.oversize_frames:
             print("Warning: %d frames are too big for the old v2.0 player; use the new player, "
                   "or a smaller size / fewer colors." % result.oversize_frames)
-        if result.size > SAFE_SIZE:
-            print("Warning: this is bigger than %s and may not fit on the calculator." % megabytes(SAFE_SIZE))
+        report_space(result.size, out.name)
         return 0
     except ConvertError as e:
         print("\nError: %s" % e, file=sys.stderr)

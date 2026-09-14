@@ -3,8 +3,9 @@ import math
 from dataclasses import dataclass
 
 from .palettes import AUTO
-from .pipeline import (SAFE_SIZE, expected_frames, format_module, frame_to_indices, iter_source_frames,
-                       make_palette, output_fps, time_range)
+from .calculator import ASSUMED_FREE
+from .pipeline import (expected_frames, format_module, frame_to_indices, iter_source_frames, make_palette,
+                       output_fps, time_range)
 
 
 @dataclass
@@ -13,13 +14,21 @@ class Estimate:
     frames: int
 
 
-def estimate_size(info, settings, palette=None, clips=3, clip_seconds=2.0, cancel=None):
-    """Encodes a few short clips with the real encoder and scales the result up."""
+def clip_count(seconds):
+    """How many sample clips to encode: 3 for short videos, more for long ones (up to 9 for an
+    hour or more), so a busy stretch is less likely to be missed."""
+    return 3 if seconds <= 300 else min(9, 3 + int(seconds // 600))
+
+
+def estimate_size(info, settings, palette=None, clips=None, clip_seconds=2.0, cancel=None):
+    """Encodes a few short clips spread over the video with the real encoder, and scales up."""
     module = format_module(settings.fmt)
     fps = output_fps(settings, info)
     start, end = time_range(settings, info)
     if end is None:
         end = start + 60.0
+    if clips is None:
+        clips = clip_count(end - start)
     total_frames = expected_frames(settings, info) or max(1, math.ceil((end - start) * fps))
     if palette is None:
         palette = make_palette(info, settings)
@@ -90,7 +99,7 @@ def _smaller_steps(settings):
             yield s
 
 
-def make_it_fit(info, settings, target=SAFE_SIZE, cancel=None, on_step=None):
+def make_it_fit(info, settings, target=ASSUMED_FREE, cancel=None, on_step=None):
     """Returns (settings, estimate) that fit under `target`, or (None, last_estimate)."""
     est = estimate_size(info, settings, cancel=cancel)
     if est.size <= target:

@@ -19,9 +19,9 @@ from cgvideo import estimate, names  # noqa: E402
 from cgvideo.errors import Cancelled, ConvertError  # noqa: E402
 from cgvideo.palettes import AUTO, FIXED_PALETTES, PALETTE_LABELS  # noqa: E402
 from cgvideo.timefmt import format_time, parse_time  # noqa: E402
-from cgvideo.pipeline import (CALCULATOR_STORAGE, FPS_CHOICES, SAFE_SIZE, SCREEN_H, SCREEN_W,  # noqa: E402
-                              SIZE_PRESETS, FrameGrabber, Settings, convert, frame_to_indices,
-                              make_palette, probe, screen_image)
+from cgvideo.calculator import ASSUMED_FREE, available_space, copy_to, find_calculator  # noqa: E402
+from cgvideo.pipeline import (FPS_CHOICES, SCREEN_H, SCREEN_W, SIZE_PRESETS, FrameGrabber,  # noqa: E402
+                              Settings, convert, frame_to_indices, make_palette, probe, screen_image)
 
 VIDEO_TYPES = [("Videos", "*.mp4 *.mov *.m4v *.avi *.mkv *.webm *.wmv *.flv *.mpg *.mpeg *.gif"),
                ("All files", "*.*")]
@@ -30,6 +30,7 @@ SIZE_LABELS = ["Tiny: 96×54 (smallest file)", "Recommended: 128×72", "Sharp: 1
                "Full screen: 384×216 (biggest file)"]
 FPS_LABELS = ["Same as the video"] + ["%d fps%s" % (f, "  (recommended)" if f == 15 else "") for f in FPS_CHOICES[1:]]
 SIDE_WIDTH = 430  # width of the settings column, in pixels
+ESTIMATE_MARGIN = 1.05  # size estimates can be a few percent low, so leave that much room
 
 
 def fmt_size(n):
@@ -135,6 +136,7 @@ class App:
         self._preview_after = None
         self._suspend_traces = False
         self.zoom = 1
+        self.calculator = None  # a Calculator when one is connected over USB
 
         root.title("CG50 Video Converter")
         root.minsize(420, 320)
@@ -142,6 +144,7 @@ class App:
         self._bind_scrolling()
         self._fit_to_screen()
         threading.Thread(target=self._worker, daemon=True).start()
+        threading.Thread(target=self._watch_calculator, daemon=True).start()
         root.after(self.POLL_MS, self._poll)
 
     # --- Layout ---------------------------------------------------------------
@@ -270,14 +273,16 @@ class App:
         self.meter_bar = self.meter.create_rectangle(0, 0, 0, 12, width=0, fill="#3a3")
         self.fit_btn = ttk.Button(step3, text="Make it fit", command=self.make_it_fit, state="disabled")
         self.fit_btn.grid(row=1, column=2, padx=(6, 0))
+        self.calc_label = ttk.Label(step3, text="", foreground="#777", wraplength=SIDE_WIDTH - 40)
+        self.calc_label.grid(row=2, column=0, columnspan=3, sticky="w", pady=(0, 8))
 
-        ttk.Label(step3, text="Save as").grid(row=2, column=0, sticky="w")
+        ttk.Label(step3, text="Save as").grid(row=3, column=0, sticky="w")
         self.output_var = tk.StringVar(value="")
-        ttk.Entry(step3, textvariable=self.output_var, width=24).grid(row=2, column=1, sticky="ew", padx=6)
-        ttk.Button(step3, text="Change…", command=self.choose_output).grid(row=2, column=2)
+        ttk.Entry(step3, textvariable=self.output_var, width=24).grid(row=3, column=1, sticky="ew", padx=6)
+        ttk.Button(step3, text="Change…", command=self.choose_output).grid(row=3, column=2)
 
         actions = ttk.Frame(step3)
-        actions.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(10, 0))
+        actions.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(10, 0))
         actions.columnconfigure(1, weight=1)
         self.convert_btn = ttk.Button(actions, text="Convert", command=self.start_convert, state="disabled")
         self.convert_btn.grid(row=0, column=0)
@@ -288,8 +293,12 @@ class App:
         self.show_btn = ttk.Button(actions, text="Show file", state="disabled",
                                    command=lambda: show_in_folder(self.last_output))
         self.show_btn.grid(row=1, column=2, pady=(6, 0))
+        self.copy_btn = ttk.Button(actions, text="Copy to calculator", state="disabled",
+                                   command=self.copy_to_calculator)
+        self.copy_btn.grid(row=1, column=0, columnspan=2, sticky="w", pady=(6, 0))
         self.status = ttk.Label(step3, text="", wraplength=SIDE_WIDTH - 40)
-        self.status.grid(row=4, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        self.status.grid(row=5, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        self._show_calculator()
 
         for var in (self.colors_var, self.dither_var, self.start_var, self.end_var, self.fit_var, self.fmt_var):
             var.trace_add("write", lambda *_: self._settings_changed())
@@ -311,10 +320,13 @@ class App:
         root = self.root
         root.update_idletasks()
         screen_w, screen_h = root.winfo_screenwidth(), root.winfo_screenheight()
-        want_w, want_h = self.outer.winfo_reqwidth(), self.outer.winfo_reqheight()
+        # Try the double-size preview and measure; the settings column may be the taller one anyway.
         # Leave room for the menu bar, the Dock/taskbar and the window's title bar.
-        if want_w + SCREEN_W + 40 <= screen_w and want_h + SCREEN_H + 160 <= screen_h:
-            self._set_zoom(2)
+        self._set_zoom(2)
+        root.update_idletasks()
+        want_w, want_h = self.outer.winfo_reqwidth(), self.outer.winfo_reqheight()
+        if want_w + 40 > screen_w or want_h + 160 > screen_h:
+            self._set_zoom(1)
             root.update_idletasks()
             want_w, want_h = self.outer.winfo_reqwidth(), self.outer.winfo_reqheight()
         width = min(want_w + 4, screen_w - 40)
@@ -540,7 +552,60 @@ class App:
             return
         self.fit_btn.configure(state="disabled")
         self.estimate_label.configure(text="Finding settings that fit…", foreground="")
-        self.jobs.put(("fit", self.generation, settings))
+        self.jobs.put(("fit", self.generation, settings, int(self._space() / ESTIMATE_MARGIN)))
+
+    def _space(self):
+        """Bytes this video may use: the calculator's real free space when it's connected."""
+        return available_space(self.calculator, Path(self.output_var.get()).name or "video.bin")
+
+    def _show_calculator(self):
+        calc = self.calculator
+        if calc:
+            text = "Calculator connected (%s): %s free of %s." % (calc.path.name, fmt_size(calc.free),
+                                                                 fmt_size(calc.total))
+            if not calc.has_player:
+                text += " Room is kept for the add-in, which isn't on it yet."
+        else:
+            text = ("Calculator not connected: assuming %s free. Connect it by USB (USB Flash mode) "
+                    "to check its real free space." % fmt_size(ASSUMED_FREE))
+        self.calc_label.configure(text=text)
+        can_copy = calc is not None and self.last_output is not None and not self.converting
+        self.copy_btn.configure(state="normal" if can_copy else "disabled")
+
+    def copy_to_calculator(self):
+        calc, source = self.calculator, self.last_output
+        if not calc or not source or not Path(source).exists():
+            return
+        size, space = Path(source).stat().st_size, available_space(calc, Path(source).name)
+        if size > space:
+            self._error("Not enough space", "The file is %s, but the calculator only has room for %s. Delete "
+                        "something from the calculator (and empty the Trash if you use a Mac), or convert with "
+                        "smaller settings." % (fmt_size(size), fmt_size(space)))
+            return
+        self.copy_btn.configure(state="disabled")
+        self.set_status("Copying to the calculator…")
+
+        def work():
+            try:
+                self.results.put(("copied", copy_to(calc, source)))
+            except OSError as e:
+                self.results.put(("copy_error", e))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _watch_calculator(self):
+        """Checks every few seconds whether a calculator is plugged in (and its free space)."""
+        last = ()
+        while True:
+            try:
+                calc = find_calculator()
+            except Exception:  # never let a strange drive stop the window
+                calc = None
+            key = (str(calc.path), calc.free, calc.has_player) if calc else None
+            if key != last:
+                last = key
+                self.results.put(("calculator", calc))
+            time.sleep(3)
 
     def start_convert(self):
         if not self.info or self.converting:
@@ -650,7 +715,7 @@ class App:
                         palette = self._palette_for(settings, grabber)
                         self.results.put(("estimate", gen, estimate.estimate_size(grabber.info, settings, palette=palette)))
                     elif kind == "fit":
-                        fitted, est = estimate.make_it_fit(grabber.info, job[2])
+                        fitted, est = estimate.make_it_fit(grabber.info, job[2], target=job[3])
                         self.results.put(("fit", gen, fitted, est))
                 except Exception as e:  # reported in the window
                     self.results.put(("error", gen, kind, e))
@@ -748,8 +813,13 @@ class App:
                 if result.oversize_frames:
                     warn += ("\n\nNote: %d frames are too big for the old v2.0 player. "
                              "They play fine with the new player." % result.oversize_frames)
-                if result.size > SAFE_SIZE:
-                    warn += "\n\nNote: this file may be too big for the calculator's storage."
+                if result.size > self._space():
+                    warn += ("\n\nNote: this file is bigger than the calculator's free space (%s)."
+                             % fmt_size(self._space()) if self.calculator else
+                             "\n\nNote: this file is bigger than %s, so it may not fit on the calculator."
+                             % fmt_size(ASSUMED_FREE))
+                if self.calculator:
+                    text += " Or click Copy to calculator."
                 self.set_status(text + warn.replace("\n\n", " "))
                 if self.dialogs:
                     messagebox.showinfo("Done!", text + warn)
@@ -759,15 +829,33 @@ class App:
                 err = msg[1]
                 self._error("Conversion failed", str(err) if isinstance(err, ConvertError)
                             else "Something went wrong: %s" % err)
+            self._show_calculator()
+        elif kind == "calculator":
+            self.calculator = msg[1]
+            self._show_calculator()
+            if self.last_estimate:
+                self._show_estimate(self.last_estimate)
+        elif kind == "copied":
+            self.set_status("Copied %s to the calculator. Eject the calculator before unplugging it "
+                            "(on a Mac: the ⏏ button next to it in Finder)." % msg[1].name)
+            self._show_calculator()
+        elif kind == "copy_error":
+            self._error("Copy failed", "Couldn't copy the file to the calculator: %s" % msg[1])
+            self._show_calculator()
 
     def _show_estimate(self, est):
         self.last_estimate = est
-        fits = est.size <= SAFE_SIZE
-        text = "File size: about %s  %s" % (fmt_size(est.size), "✓ fits on the calculator" if fits
-                                              else "✗ too big for the calculator")
-        self.estimate_label.configure(text=text, foreground="#070" if fits else "#b00")
+        space = self._space()
+        fits = est.size * ESTIMATE_MARGIN <= space
+        if fits:
+            verdict = "✓ fits on the calculator" if self.calculator else "✓ should fit"
+        else:
+            verdict = "✗ too big for the calculator"
+        self.estimate_label.configure(text="File size: about %s  %s" % (fmt_size(est.size), verdict),
+                                      foreground="#070" if fits else "#b00")
+        # The bar shows how much of the free space (see the line below it) this video would use.
         width = max(1, self.meter.winfo_width())
-        self.meter.coords(self.meter_bar, 0, 0, width * min(1.0, est.size / CALCULATOR_STORAGE), 12)
+        self.meter.coords(self.meter_bar, 0, 0, width * min(1.0, est.size / max(1, space)), 12)
         self.meter.itemconfigure(self.meter_bar, fill="#3a3" if fits else "#c33")
         self.root.after_idle(self._grow_to_fit)
 
@@ -807,6 +895,7 @@ def _run_selftest(app, root, result):
         root.winfo_width(), root.winfo_height(), root.winfo_screenwidth(), root.winfo_screenheight(),
         app.zoom, "" if fits else " (DOES NOT FIT)"))
     tmp = Path(tempfile.mkdtemp())
+    calc_dir = tmp / "CALCULATOR"
     video = tmp / "selftest.avi"
     _make_test_video(video)
     app.end_var.set("5:00")  # past the end of the 2 s test video: must stop at its end
@@ -834,9 +923,21 @@ def _run_selftest(app, root, result):
             root.update()
             no_bars = not app.scroller.bars_shown()
             print("selftest: %s at full size" % ("no scroll bars" if no_bars else "scroll bars shown (FAILED)"))
+            state["ok"] = ok and fits and no_bars and trim_ok
+            # Pretend a calculator is plugged in, and copy the video onto it.
+            from cgvideo.calculator import Calculator
+            calc_dir.mkdir()
+            app.calculator = Calculator(calc_dir, free=10 ** 7, total=16 * 2 ** 20, has_player=True)
+            app._show_calculator()
+            app.copy_to_calculator()
+            state["stage"] = "copying"
+        elif state["stage"] == "copying" and app.status.cget("text").startswith(("Copied", "Couldn't")):
+            copied = calc_dir / "out.bin"
+            same = copied.exists() and copied.read_bytes() == (tmp / "out.bin").read_bytes()
+            print("selftest: copy to calculator %s" % ("ok" if same else "FAILED"))
             scrolls = _check_scrolling(app, root)
             print("selftest: scrolling %s" % ("ok" if scrolls else "FAILED"))
-            result["ok"] = ok and scrolls and fits and no_bars and trim_ok
+            result["ok"] = state["ok"] and same and scrolls
             root.destroy()
             return
         root.after(100, check)
