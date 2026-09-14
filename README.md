@@ -19,6 +19,7 @@ To build them yourself instead, see [BUILDING.md](BUILDING.md). The latest build
 - **Windows:** unzip `CG50-Video-Converter-Windows.zip` and double-click **CG50 Video Converter.exe**. If Windows says "Windows protected your PC", click **More info**, then **Run anyway**. The app isn't signed, so Windows doesn't recognize it.
 - **Mac:** unzip `CG50-Video-Converter-macOS.zip`. The first time, **right-click** the app and choose **Open**, then **Open** again. The app isn't signed, so macOS asks once.
 - **If you already have Python 3.9+:** double-click `Convert Video (Mac).command` or `Convert Video (Windows).bat` in this folder. The first run takes a minute to set itself up.
+  - On a Mac, the launcher picks whichever installed Python has the newest window toolkit. With an old one (such as Python 3.9 from python.org), the window reacts slowly to clicks. If it does, install the latest Python from [python.org](https://www.python.org/downloads/) and double-click the launcher again.
 
 Then:
 

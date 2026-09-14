@@ -11,23 +11,37 @@ fail() {
     exit 1
 }
 
-# Find Python 3.9+ with Tkinter (the python.org installer includes it).
+# Pick the Python 3.9+ with the newest Tk (the window toolkit): Tk 8.6.12 and older react
+# slowly to clicks on recent macOS.
+TK_SCORE='import re, sys, tkinter
+if sys.version_info < (3, 9): sys.exit(1)
+v = [int(x) for x in re.findall(r"\d+", tkinter.Tcl().eval("info patchlevel"))[:3]] + [0, 0, 0]
+print(v[0] * 10000 + v[1] * 100 + v[2])'
 PY=""
-for candidate in \
-    /Library/Frameworks/Python.framework/Versions/Current/bin/python3 \
-    python3.13 python3.12 python3.11 python3.10 python3.9 python3; do
-    if command -v "$candidate" >/dev/null 2>&1 &&
-        "$candidate" -c 'import sys, tkinter; sys.exit(sys.version_info < (3, 9))' >/dev/null 2>&1; then
+BEST=0
+for candidate in /Library/Frameworks/Python.framework/Versions/*/bin/python3 \
+    /opt/homebrew/bin/python3 /usr/local/bin/python3 python3; do
+    command -v "$candidate" >/dev/null 2>&1 || continue
+    score="$("$candidate" -c "$TK_SCORE" 2>/dev/null)" || continue
+    if [ "$score" -gt "$BEST" ]; then
         PY="$(command -v "$candidate")"
-        break
+        BEST="$score"
     fi
 done
 [ -n "$PY" ] || fail "Python 3.9 or newer is needed. Install it from https://www.python.org/downloads/
 then double-click this file again. (Homebrew's Python also works after: brew install python-tk)"
+if [ "$BEST" -lt 80613 ]; then
+    echo "Note: this Python's window toolkit is old, so the window may feel slow."
+    echo "For a smoother window, install the latest Python from https://www.python.org/downloads/"
+    echo
+fi
 
-if [ ! -x .venv/bin/python ]; then
-    echo "First run: setting things up. This takes a minute or two..."
+# (Re)create the environment when it's missing or was made with a different Python.
+if [ ! -x .venv/bin/python ] || [ "$(cat .venv/python-used.txt 2>/dev/null)" != "$PY" ]; then
+    echo "Setting things up with $("$PY" --version). This takes a minute or two..."
+    rm -rf .venv
     "$PY" -m venv .venv || fail "Couldn't create the converter's Python environment."
+    echo "$PY" > .venv/python-used.txt
 fi
 if ! cmp -s converter/requirements.txt .venv/installed-requirements.txt; then
     .venv/bin/python -m pip install --disable-pip-version-check -q -r converter/requirements.txt ||
