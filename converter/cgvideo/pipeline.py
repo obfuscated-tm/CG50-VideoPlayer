@@ -141,12 +141,17 @@ def resize_frame(bgr, width, height, fit="letterbox"):
     return canvas
 
 
-def iter_source_frames(info, start, end, fps, cancel=None):
+def iter_source_frames(info, start, end, fps, cancel=None, seek=False):
     """Yields BGR frames resampled to `fps`: output frame i is the source frame nearest to
-    start + i/fps. Frames are read in order, so the timing is exact (29.97 fps included)."""
+    start + i/fps. Frames are read in order, so the timing is exact (29.97 fps included).
+    seek=True jumps to `start` instead of reading every frame before it: much faster far
+    into long videos, but may land a frame off, so it's only used for size estimates."""
     cap = cv2.VideoCapture(info.path)
     try:
         next_index = 0  # index of the frame the next read returns
+        first = int(round(start * info.fps))
+        if seek and first > 0 and cap.set(cv2.CAP_PROP_POS_FRAMES, first):
+            next_index = first
         current = None
         i = 0
         while True:

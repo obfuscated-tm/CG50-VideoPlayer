@@ -19,11 +19,20 @@ jobs:
     steps:
       - name: Install build tools
         run: |
-          apt-get -qq update
+          # The image is Debian buster, whose packages now live on archive.debian.org.
+          printf '%s\n' 'deb http://archive.debian.org/debian buster main' \
+            'deb http://archive.debian.org/debian-security buster/updates main' > /etc/apt/sources.list
+          rm -f /etc/apt/sources.list.d/*.list
+          apt-get -o Acquire::Check-Valid-Until=false -qq update
           apt-get -qqy install --no-install-recommends make gcc g++ libc6-dev git curl ca-certificates \
-            unzip python3-pip libpng-dev zlib1g-dev
-          # mkg3a needs a newer CMake than Debian bullseye has.
-          pip3 install -q 'cmake>=3.31'
+            unzip libpng-dev zlib1g-dev
+          # mkg3a needs CMake 3.31 or newer: use Kitware's prebuilt release.
+          curl -fsSL -o /tmp/cmake.tar.gz \
+            https://github.com/Kitware/CMake/releases/download/v3.31.8/cmake-3.31.8-linux-x86_64.tar.gz
+          echo "630615d8e98ac33eba7fbe472626dff5c899c85af3c024585ae109166a6909d0  /tmp/cmake.tar.gz" | sha256sum -c -
+          mkdir -p /opt/cmake
+          tar -xzf /tmp/cmake.tar.gz -C /opt/cmake --strip-components=1
+          echo /opt/cmake/bin >> "$GITHUB_PATH"
 
       - uses: actions/checkout@v4
 
@@ -110,7 +119,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install
-        run: python -m pip install -r converter/requirements.txt pyinstaller
+        run: python -m pip install -r converter/requirements.txt "pyinstaller>=6,<7"
       - name: Build (Windows)
         if: runner.os == 'Windows'
         shell: bash
@@ -126,8 +135,10 @@ jobs:
           if ($p.ExitCode -ne 0) { exit 1 }
       - name: Build (macOS)
         if: runner.os == 'macOS'
+        # --onefile: in a regular .app bundle, OpenCV's loader finds its own package twice (the
+        # bundle splits it between Resources and Frameworks) and refuses to start.
         run: |
-          pyinstaller --noconfirm --windowed --name "CG50 Video Converter" --paths converter converter/convert.py
+          pyinstaller --noconfirm --onefile --windowed --name "CG50 Video Converter" --paths converter converter/convert.py
           "dist/CG50 Video Converter.app/Contents/MacOS/CG50 Video Converter" --selftest
           ditto -c -k --keepParent "dist/CG50 Video Converter.app" CG50-Video-Converter-macOS.zip
       - uses: actions/upload-artifact@v4

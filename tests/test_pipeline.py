@@ -35,6 +35,20 @@ def frame_index(bgr):
     return int(round(bgr.mean() / 2))
 
 
+def decoded_sequence(path):
+    """The frames this OpenCV build actually decodes, in order. (On Linux, OpenCV's own AVI
+    writer + FFmpeg reader repeat the first frame, so this isn't always 0, 1, 2, ...)"""
+    cap = cv2.VideoCapture(str(path))
+    seq = []
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        seq.append(frame_index(frame))
+    cap.release()
+    return seq
+
+
 @pytest.fixture(scope="module")
 def counting(tmp_path_factory):
     return make_counting_video(tmp_path_factory.mktemp("v") / "count.avi")
@@ -63,21 +77,31 @@ def test_probe_rejects_non_video(tmp_path):
 
 def test_resampling_picks_nearest_frames(counting):
     info = probe(counting)
+    seq = decoded_sequence(counting)
     got = [frame_index(f) for f in iter_source_frames(info, 0.0, None, 15.0)]
     want = []
     i = 0
-    while int(round((i / 15.0) * info.fps)) < 90:
-        want.append(int(round((i / 15.0) * info.fps)))
+    while int(round((i / 15.0) * info.fps)) < len(seq):
+        want.append(seq[int(round((i / 15.0) * info.fps))])
         i += 1
     assert got == want
 
 
 def test_trimming(counting):
     info = probe(counting)
+    seq = decoded_sequence(counting)
     got = [frame_index(f) for f in iter_source_frames(info, 1.0, 2.0, 10.0)]
     assert len(got) == 10
-    assert got[0] == round(1.0 * info.fps)
-    assert got[-1] == round(1.9 * info.fps)
+    assert got[0] == seq[round(1.0 * info.fps)]
+    assert got[-1] == seq[round(1.9 * info.fps)]
+
+
+def test_seeking_lands_close(counting):
+    info = probe(counting)
+    exact = [frame_index(f) for f in iter_source_frames(info, 2.0, 2.5, 10.0)]
+    seeked = [frame_index(f) for f in iter_source_frames(info, 2.0, 2.5, 10.0, seek=True)]
+    assert len(seeked) == len(exact)
+    assert all(abs(a - b) <= 1 for a, b in zip(exact, seeked))
 
 
 def test_format1_rounds_fps(counting):

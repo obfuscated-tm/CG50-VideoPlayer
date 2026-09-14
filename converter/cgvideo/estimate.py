@@ -35,7 +35,7 @@ def estimate_size(info, settings, palette=None, clips=3, clip_seconds=2.0, cance
     counted_bytes = counted_frames = 0
     for n, clip_start in enumerate(clip_starts):
         encoder = module.FrameEncoder()
-        frames = iter_source_frames(info, clip_start, min(end, clip_start + clip_seconds), fps, cancel)
+        frames = iter_source_frames(info, clip_start, min(end, clip_start + clip_seconds), fps, cancel, seek=True)
         for k, bgr in enumerate(frames):
             size = 4 + len(encoder.encode(frame_to_indices(bgr, settings, palette)))
             if n == 0 and k == 0:
