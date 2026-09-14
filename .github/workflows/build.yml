@@ -1,0 +1,154 @@
+name: Build
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  addin:
+    name: Calculator add-in
+    runs-on: ubuntu-latest
+    # The official libfxcg toolchain image (GCC 10.1 for sh3eb-elf, same as the Windows SDK).
+    container: jonimoose/libfxcg-toolchain:latest
+    steps:
+      - name: Install build tools
+        run: |
+          apt-get -qq update
+          apt-get -qqy install --no-install-recommends make gcc g++ libc6-dev git curl ca-certificates \
+            unzip python3-pip libpng-dev zlib1g-dev
+          # mkg3a needs a newer CMake than Debian bullseye has.
+          pip3 install -q 'cmake>=3.31'
+
+      - uses: actions/checkout@v4
+
+      - name: Find the mkg3a version
+        id: mkg3a
+        run: echo "rev=$(git ls-remote https://gitlab.com/taricorp/mkg3a.git HEAD | cut -f1)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        id: cache-mkg3a
+        with:
+          path: /opt/mkg3a
+          key: mkg3a-${{ steps.mkg3a.outputs.rev }}
+
+      - name: Build mkg3a
+        if: steps.cache-mkg3a.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 https://gitlab.com/taricorp/mkg3a.git /tmp/mkg3a
+          cmake -S /tmp/mkg3a -B /tmp/mkg3a-build -DCMAKE_BUILD_TYPE=Release
+          cmake --build /tmp/mkg3a-build --target mkg3a -j"$(nproc)"
+          mkdir -p /opt/mkg3a
+          cp /tmp/mkg3a-build/src/mkg3a /opt/mkg3a/
+
+      - name: Assemble the SDK (libfxcg v0.6)
+        run: |
+          mkdir -p sdk/bin sdk/toolchain
+          curl -fsSL -o /tmp/libfxcg.zip https://github.com/Jonimoose/libfxcg/releases/download/v0.6/libfxcg-0.6-bin.zip
+          unzip -q /tmp/libfxcg.zip -d sdk
+          for f in prizm_rules prizm.x; do
+            curl -fsSL -o "sdk/toolchain/$f" "https://raw.githubusercontent.com/Jonimoose/libfxcg/v0.6/toolchain/$f"
+          done
+          cp /opt/mkg3a/mkg3a sdk/bin/
+
+      - name: Build
+        run: make FXCGSDK="$GITHUB_WORKSPACE/sdk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: video_player
+          path: video_player.g3a
+
+  tests:
+    name: Tests (${{ matrix.os }}, Python ${{ matrix.python }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, python: "3.9" }
+          - { os: ubuntu-latest, python: "3.12" }
+          - { os: macos-latest, python: "3.12" }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install
+        run: python -m pip install -r tests/requirements-dev.txt
+      - name: Check shell scripts
+        if: runner.os == 'Linux'
+        run: shellcheck tools/setup-sdk.sh tools/setup-mac.sh "Convert Video (Mac).command"
+      - name: Tests (the C decoder runs under AddressSanitizer on Linux)
+        env:
+          REQUIRE_CC: "1"
+        run: python -m pytest tests -q
+      - name: Converter window self-test (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get -qq update && sudo apt-get -qqy install xvfb
+          xvfb-run -a python converter/convert.py --selftest
+      - name: Converter window self-test (macOS)
+        if: runner.os == 'macOS'
+        run: python converter/convert.py --selftest
+
+  converter-apps:
+    name: Converter app (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: python -m pip install -r converter/requirements.txt pyinstaller
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          pyinstaller --noconfirm --onefile --windowed --name "CG50 Video Converter" --paths converter converter/convert.py
+          cd dist && 7z a ../CG50-Video-Converter-Windows.zip "CG50 Video Converter.exe"
+      - name: Self-test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $p = Start-Process -FilePath "dist\CG50 Video Converter.exe" -ArgumentList "--selftest" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { exit 1 }
+      - name: Build (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          pyinstaller --noconfirm --windowed --name "CG50 Video Converter" --paths converter converter/convert.py
+          "dist/CG50 Video Converter.app/Contents/MacOS/CG50 Video Converter" --selftest
+          ditto -c -k --keepParent "dist/CG50 Video Converter.app" CG50-Video-Converter-macOS.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: converter-${{ runner.os }}
+          path: CG50-Video-Converter-*.zip
+
+  release:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [addin, tests, converter-apps]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --generate-notes \
+            artifacts/video_player/video_player.g3a artifacts/converter-*/CG50-Video-Converter-*.zip
