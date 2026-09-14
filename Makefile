@@ -29,18 +29,21 @@ INCLUDES	:=
 # options for code and add-in generation
 #---------------------------------------------------------------------------------
 
-MKG3AFLAGS := -n basic:VidPlayer
+# Icons are 92x64 24-bit BMPs (regenerate with tools/make_icons.py). Paths are relative
+# to the build directory, where mkg3a runs.
+MKG3AFLAGS := -n basic:VidPlayer -i uns:../unselected.bmp -i sel:../selected.bmp
 
 # Optional: add -flto to CFLAGS and LDFLAGS to enable link-time optimization
 # (LTO). Doing so will usually allow the compiler to generate much better code
 # (smaller and/or faster), but may expose bugs in your code that don't cause
 # any trouble without LTO enabled.
 CFLAGS    := -mb -m4a-nofpu -mhitachi -Os -Wall \
-             $(MACHDEP) $(INCLUDE) -ffunction-sections -fdata-sections \
-             -IC:/PrizmSDK-win-0.6/include
+             $(MACHDEP) $(INCLUDE) -ffunction-sections -fdata-sections
 CXXFLAGS  := $(CFLAGS) -fno-exceptions
 
-LDFLAGS   := $(MACHDEP) -T$(FXCGSDK)/toolchain/prizm.x -Wl,-static -Wl,-gc-sections -Wl,--entry=initialize
+# --print-memory-usage shows how much of the 64 KB static RAM the add-in uses.
+LDFLAGS   := $(MACHDEP) -T$(FXCGSDK)/toolchain/prizm.x -Wl,-static -Wl,-gc-sections -Wl,--entry=initialize \
+             -Wl,--print-memory-usage
 
 #---------------------------------------------------------------------------------
 # any extra libraries we wish to link with the project

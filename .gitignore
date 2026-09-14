@@ -1,1 +1,21 @@
 .DS_Store
+
+# Calculator build output
+/build/
+/video_player.bin
+/video_player.g3a
+
+# Converted videos
+*.bin
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+/dist/
+*.spec
+
+# Host test binaries
+/tests/host_player
+/tests/*.dSYM/
